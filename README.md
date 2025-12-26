@@ -36,60 +36,54 @@ credit_spread_regime/
 └── README.md
 ```
 
-## Recreating the Project 
+## Targets: Forward spread widening events
 
-1) Create environment
-conda env create -n spread_regime_2501 -f environment.yml
-conda activate spread_regime_2501
+We define binary targets based on **maximum forward widening within a window**.
 
-
-2) Download/cache data (requires FRED API key)
-Create a .env file in the project root:
-FRED_API_KEY=YOUR_KEY_HERE
-
-Then run:
-python -m src.data_loader
-
-3) Run analysis
-Open and run:
-notebooks/01_eda_spread_regimes.ipynb
+For a horizon `H` (trading days) and threshold `X` (bps), label at time `t` is:
 
 
-## Modeling Approach
-**Regime labeling:**
+max(OAS_{t+1..t+H}) − OAS_t ≥ X bps
 
-Stress (level): IG OAS above a historical percentile threshold (e.g., 90th percentile).
+$$ \max_{\tau \in \{t+1, \dots, t+H\}} (\text{OAS}_{\tau} - \text{OAS}_{t}) \ge X $$
 
-Stress-entry (forward): predicts whether stress occurs within the next H trading days, conditional on not being stressed today.
 
-This shift from stress-level classification to stress-entry prediction is important because:
-stress levels are persistent and can inflate apparent performance
-entry prediction is closer to a real early-warning use case and is materially harder
+The label is positive if the maximum forward increase in IG OAS over the next H trading days exceeds X basis points relative to today’s level.
 
-**Evaluation:**
+Interpretation example (`widen_25bps_21d`):
 
-Walk-forward evaluation by calendar year (no random shuffling).
+> “As of today, what is the probability that IG OAS widens by **≥25 bps at some point** over the next **21 trading days**?”
 
-Metrics: ROC AUC reported by year plus aggregate summaries.
+### Locked signals (used going forward)
 
-**Current Status:**
+- `widen_10bps_21d` — primary short-horizon risk overlay
+- `widen_25bps_21d` — secondary “stress alert” risk signal
+- `widen_50bps_21d` — optional tail “red alert” signal (rare)
 
-Implemented:
+Target construction lives in `src/targets.py`, with locked definitions in `src/config.py`.
 
-* FRED data ingestion and caching
+---
 
-* EDA of spreads vs rates and curve slope
 
-* Baseline models using macro-only, lagged features (leakage-safe)
+## Methodology
 
-Walk-forward evaluation for:
+- **Leakage control:** features are lagged (only information available at time `t` is used to predict forward events).
+- **Model:** logistic regression baseline (scaled inputs; class-weighted).
+- **Validation:** **walk-forward by year** (train on prior years, test on the next year).
+- **Metrics:**
+  - **Pooled ROC AUC:** computed across all out-of-sample predictions
+  - **Weighted AUC:** year-level AUCs weighted by observations
 
-* stress-level classification
+---
 
-* stress-entry prediction
+## Results: Horizon × threshold grid (pooled ROC AUC)
 
-Next improvements (in-progress):
+Pooled AUC results for predicting forward IG OAS widening:
 
-* Redefine stress-entry using a minimum-duration stress rule to reduce noise from threshold “churn” and improve economic realism.
+| Threshold (bps) \ Horizon (days) | 21 | 63 | 126 |
+|---|---:|---:|---:|
+| **10** | **0.6648** | 0.5517 | 0.5050 |
+| **25** | **0.6290** | 0.5447 | 0.4249 |
+| **50** | **0.6340** | 0.4895 | 0.5225 |
 
-* Expand feature set and evaluate non-linear models (e.g., XGBoost, PyTorch).
+**Key takeaway:** macro variables are most informative for **short-horizon (≈1 month)** spread widening risk. Predictive power decays at longer horizons, consistent with credit outcomes becoming dominated by fundamentals and idiosyncratic factors.
