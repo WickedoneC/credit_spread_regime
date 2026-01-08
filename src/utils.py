@@ -46,3 +46,9 @@ def prettyTable(
         out = out.sort_values("count", ascending=ascending)
 
     return out
+
+
+def assert_columns_exist(df, cols: list[str], name: str = "columns") -> None:
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing {name}: {missing}")

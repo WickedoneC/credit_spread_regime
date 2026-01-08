@@ -68,20 +68,43 @@ def fetch_and_cache_series(series_map: Dict[str, str]) -> Dict[str, pd.Series]:
     return results
 
 
-def main() -> None:
+
+def load_data() -> pd.DataFrame:
     """
-    Simple manual test: fetch IG OAS, 10Y, and 10Y-2Y slope.
+    Load and return the full daily modeling DataFrame.
+
+    This is a thin wrapper around existing loader logic so that
+    notebooks and scripts (e.g. run_daily.py) share a stable interface.
+    """
+    return main()
+
+
+def main() -> pd.DataFrame:
+    """
+    Load core daily macro series and return a merged DataFrame.
     """
     series_map = {
-        "BAMLC0A0CM": "ig_oas.csv",  # IG corporate OAS
-        "DGS10": "dgs10.csv",        # 10Y Treasury yield
-        "T10Y2Y": "t10y2y.csv",      # 10Y-2Y slope
+        "BAMLCOA0CM": "ig_oas.csv",   # IG corporate OAS
+        "DGS10": "dgs10.csv",         # 10Y Treasury yield
+        "T10Y2Y": "t10y2y.csv",       # 10Y-2Y slope
     }
 
     data = fetch_and_cache_series(series_map)
 
     for sid, s in data.items():
-        print(f"{sid}: {s.index.min().date()} → {s.index.max().date()}, {s.shape[0]} obs")
+        print(f"{sid}: {s.index.min().date()} -> {s.index.max().date()}, {s.shape[0]} obs")
+
+    df = pd.concat(
+        {
+            "ig_oas": data["BAMLCOA0CM"],
+            "dgs10": data["DGS10"],
+            "t10y2y": data["T10Y2Y"],
+        },
+        axis=1,
+    ).sort_index()
+
+    return df
+
 
 
 if __name__ == "__main__":

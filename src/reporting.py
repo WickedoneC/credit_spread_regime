@@ -79,3 +79,147 @@ def save_daily_outputs(
 
     daily.to_csv(out_dir / "daily_risk_table.csv", index=False)
     return daily
+
+
+# src/reporting.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Tuple, List, Optional
+
+import numpy as np
+import pandas as pd
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import roc_auc_score
+
+
+def walk_forward_proba(
+    eval_df: pd.DataFrame,
+    feature_cols: list[str],
+    target_col: str,
+    min_train_years: int = 5,
+) -> dict:
+    """
+    Walk-forward by year.
+    Fits on years[:i], tests on year[i], iterating forward.
+    Returns:
+      - by_year AUC table
+      - pooled/weighted AUCs
+      - oos_y: concatenated out-of-sample labels (indexed by date)
+      - oos_proba: concatenated out-of-sample predicted probabilities (indexed by date)
+
+    Leakage safety: caller must ensure feature_cols are already lagged appropriately.
+    """
+    df_ = eval_df.dropna(subset=feature_cols + [target_col]).copy()
+    X = df_[feature_cols]
+    y = df_[target_col].astype(int)
+
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=3000, class_weight="balanced"))
+    ])
+
+    years = sorted(df_.index.year.unique())
+    results = []
+    oos_y_parts = []
+    oos_proba_parts = []
+
+    for i in range(min_train_years, len(years)):
+        train_years = years[:i]
+        test_year = years[i]
+
+        train_idx = df_.index.year.isin(train_years)
+        test_idx = df_.index.year == test_year
+
+        X_train, y_train = X.loc[train_idx], y.loc[train_idx]
+        X_test, y_test = X.loc[test_idx], y.loc[test_idx]
+
+        # Need both classes in train and test
+        if y_train.nunique() < 2 or y_test.nunique() < 2:
+            continue
+
+        pipe.fit(X_train, y_train)
+        y_proba = pipe.predict_proba(X_test)[:, 1]
+
+        auc = roc_auc_score(y_test, y_proba)
+        results.append((test_year, auc, int(test_idx.sum()), int(y_test.sum())))
+
+        oos_y_parts.append(y_test)
+        oos_proba_parts.append(pd.Series(y_proba, index=y_test.index, name="oos_proba"))
+
+    by_year = pd.DataFrame(results, columns=["year", "auc", "n_obs", "n_pos"])
+
+    weighted_auc = np.average(by_year["auc"], weights=by_year["n_obs"]) if len(by_year) else np.nan
+    pooled_auc = roc_auc_score(pd.concat(oos_y_parts), pd.concat(oos_proba_parts)) if oos_y_parts else np.nan
+
+    oos_y = pd.concat(oos_y_parts).sort_index() if oos_y_parts else pd.Series(dtype=int, name="oos_y")
+    oos_proba = pd.concat(oos_proba_parts).sort_index() if oos_proba_parts else pd.Series(dtype=float, name="oos_proba")
+
+    oos_y.name = "oos_y"
+    oos_proba.name = "oos_proba"
+
+    return {
+        "target": target_col,
+        "n": int(y.shape[0]),
+        "pos": int(y.sum()),
+        "pos_rate": float(y.mean()) if len(y) else np.nan,
+        "weighted_auc": float(weighted_auc),
+        "pooled_auc": float(pooled_auc),
+        "by_year": by_year,
+        "oos_y": oos_y,
+        "oos_proba": oos_proba,
+    }
+
+
+def run_locked_targets_walkforward(
+    df: pd.DataFrame,
+    targets: list[str],
+    feature_cols_baseline: list[str],
+    feature_cols_regime: list[str],
+    min_train_years: int = 5,
+) -> dict:
+    """
+    Convenience runner that returns a results dict keyed by (target, variant).
+    Each entry contains oos_y / oos_proba / AUC summaries.
+    """
+    results: dict[tuple[str, str], dict] = {}
+
+    for tcol in targets:
+        out_base = walk_forward_proba(df, feature_cols_baseline, tcol, min_train_years=min_train_years)
+        out_reg = walk_forward_proba(df, feature_cols_regime, tcol, min_train_years=min_train_years)
+
+        results[(tcol, "baseline")] = out_base
+        results[(tcol, "regime")] = out_reg
+
+    return results
+
+
+def build_overlay_df(
+    df: pd.DataFrame,
+    results: dict,
+    target_col: str,
+    variant: str = "regime",
+    oas_col: str = "ig_oas",
+) -> pd.DataFrame:
+    """
+    Builds a single time-indexed df with:
+      - ig_oas_bps
+      - oos_proba
+      - oos_y
+    Used for decision overlays and backtest plumbing.
+    """
+    base = df.copy()
+    base["ig_oas_bps"] = base[oas_col] * 100.0
+
+    oos_proba = results[(target_col, variant)]["oos_proba"]
+    oos_y = results[(target_col, variant)]["oos_y"]
+
+    overlay = pd.DataFrame(index=base.index)
+    overlay["ig_oas_bps"] = base["ig_oas_bps"]
+    overlay["oos_proba"] = oos_proba.reindex(overlay.index)
+    overlay["oos_y"] = oos_y.reindex(overlay.index)
+
+    return overlay.dropna(subset=["oos_proba"])

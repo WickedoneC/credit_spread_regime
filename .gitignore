@@ -11,3 +11,6 @@ __pycache__/
 
 # Python packaging artifacts
 *.egg-info/
+
+
+#outputs/*
