@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import numpy as np
 import pandas as pd
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import roc_auc_score
 
 from src.calibration import per_year_threshold_series_top_n
 
@@ -80,21 +86,39 @@ def save_daily_outputs(
     daily.to_csv(out_dir / "daily_risk_table.csv", index=False)
     return daily
 
+def plot_decision_overlay(overlay_df, threshold, title):
+    """
+    threshold: float or Series aligned to overlay_df.index
+    """
+    d = overlay_df.copy()
 
-# src/reporting.py
-from __future__ import annotations
+    if not isinstance(threshold, pd.Series):
+        d["threshold"] = float(threshold)
+    else:
+        d["threshold"] = threshold.reindex(d.index)
 
-from dataclasses import dataclass
-from typing import Dict, Tuple, List, Optional
+    d["alert"] = (d["oos_proba"] >= d["threshold"]).astype(int)
 
-import numpy as np
-import pandas as pd
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+    ax1.plot(d.index, d["ig_oas_bps"], label="IG OAS (bps)")
+    ax1.set_ylabel("IG OAS (bps)")
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import roc_auc_score
+    ax2 = ax1.twinx()
+    ax2.plot(d.index, d["oos_proba"], label="Model proba", linestyle="--")
+    ax2.plot(d.index, d["threshold"], label="Threshold", linestyle=":")
+    ax2.set_ylabel("Probability")
 
+    # mark alerts
+    alerts = d[d["alert"] == 1]
+    ax2.scatter(alerts.index, alerts["oos_proba"], marker="o")
+
+    ax1.set_title(title)
+    ax1.legend(loc="upper left")
+    ax2.legend(loc="upper right")
+    plt.tight_layout()
+    plt.show()
+
+    return d
 
 def walk_forward_proba(
     eval_df: pd.DataFrame,
@@ -214,8 +238,18 @@ def build_overlay_df(
     base = df.copy()
     base["ig_oas_bps"] = base[oas_col] * 100.0
 
-    oos_proba = results[(target_col, variant)]["oos_proba"]
-    oos_y = results[(target_col, variant)]["oos_y"]
+    res = results[(target_col, variant)]
+
+    oos_proba = res["oos_proba"]
+
+    # ✅ oos_y is optional (daily run may not include it)
+    if "oos_y" in res:
+        oos_y = res["oos_y"]
+    elif target_col in df.columns:
+        # fall back to realized label from df if present
+        oos_y = df[target_col]
+    else:
+        oos_y = pd.Series(index=df.index, dtype=float)
 
     overlay = pd.DataFrame(index=base.index)
     overlay["ig_oas_bps"] = base["ig_oas_bps"]
