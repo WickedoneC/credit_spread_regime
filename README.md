@@ -230,3 +230,31 @@ We report performance both as:
 - **Weighted AUC:** average of yearly AUCs weighted by the number of observations
 
 This prevents “one crisis year” from dominating conclusions and forces the signal to prove itself across multiple market environments.
+
+
+## Run daily (local)
+
+From repo root:
+
+```bash
+python -m src.run_daily
+```
+
+## Interpreting the daily output
+
+The daily CSV contains one row per locked target:
+
+- `proba`: model-estimated probability that IG OAS will widen by at least X bps over the next 21 trading days.
+- `threshold`: calibrated per-year threshold chosen so that, historically, it fires ~Top-N alerts per year.
+- `alert`: 1 if `proba >= threshold`.
+- `risk_level` mapping:
+  - `HIGH`: primary (25 bps) alert triggered
+  - `ELEVATED`: secondary (50 bps) alert triggered (but primary not)
+  - `LOW`: neither triggered
+- `de_risk_exposure`: suggested exposure reduction (e.g., 25%) when risk is HIGH/ELEVATED.
+
+
+## Method summary
+
+We model forward IG spread widening using a walk-forward-by-year logistic regression. Features are strictly lagged (T-1) to avoid leakage. Thresholds are calibrated per calendar year using a Top-N rule to control alert frequency and make signals operationally usable. Daily output is a compact risk table + decision overlay charts to support discretionary portfolio decisions.
+

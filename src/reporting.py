@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -54,7 +56,9 @@ def build_daily_risk_table(
                 "proba": p,
                 "threshold": thr,
                 "alert": int(p >= thr),
-                "ig_oas_bps_today": float(df.loc[dt, "ig_oas"] * 100.0) if "ig_oas" in df.columns and dt in df.index else None,
+                "ig_oas_bps_today": float(df.loc[dt, "ig_oas"] * 100.0)
+                if "ig_oas" in df.columns and dt in df.index
+                else None,
             }
         )
 
@@ -86,16 +90,45 @@ def save_daily_outputs(
     daily.to_csv(out_dir / "daily_risk_table.csv", index=False)
     return daily
 
-def plot_decision_overlay(overlay_df, threshold, title):
+
+def plot_decision_overlay(
+    overlay_df: pd.DataFrame,
+    threshold: float | pd.Series,
+    title: str,
+    outpath: str | Path | None = None,
+    out_path: str | Path | None = None,
+    show: bool = False,
+):
     """
-    threshold: float or Series aligned to overlay_df.index
+    Plot a decision overlay:
+      - IG OAS (bps)
+      - model probability
+      - threshold (scalar or Series aligned to overlay_df.index)
+      - alert markers where proba >= threshold
+
+    Parameters
+    ----------
+    overlay_df : DataFrame
+        Must include columns: ['ig_oas_bps', 'oos_proba'] (and optionally 'oos_y')
+    threshold : float or pd.Series
+        If Series, should be index-aligned to overlay_df.index (will be reindexed).
+    title : str
+    outpath / out_path : str|Path|None
+        Either keyword is accepted. If provided, saves PNG to that path.
+    show : bool
+        If True, displays plot; otherwise closes figure (recommended for scripts).
+
+    Returns
+    -------
+    DataFrame
+        overlay_df with 'threshold' and 'alert' columns added.
     """
     d = overlay_df.copy()
 
     if not isinstance(threshold, pd.Series):
         d["threshold"] = float(threshold)
     else:
-        d["threshold"] = threshold.reindex(d.index)
+        d["threshold"] = threshold.reindex(d.index).astype(float)
 
     d["alert"] = (d["oos_proba"] >= d["threshold"]).astype(int)
 
@@ -110,15 +143,28 @@ def plot_decision_overlay(overlay_df, threshold, title):
 
     # mark alerts
     alerts = d[d["alert"] == 1]
-    ax2.scatter(alerts.index, alerts["oos_proba"], marker="o")
+    if not alerts.empty:
+        ax2.scatter(alerts.index, alerts["oos_proba"], marker="o")
 
     ax1.set_title(title)
     ax1.legend(loc="upper left")
     ax2.legend(loc="upper right")
     plt.tight_layout()
-    plt.show()
+
+    # Accept either outpath or out_path
+    save_path = outpath if outpath is not None else out_path
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=150)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
     return d
+
 
 def walk_forward_proba(
     eval_df: pd.DataFrame,
@@ -141,10 +187,12 @@ def walk_forward_proba(
     X = df_[feature_cols]
     y = df_[target_col].astype(int)
 
-    pipe = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(max_iter=3000, class_weight="balanced"))
-    ])
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=3000, class_weight="balanced")),
+        ]
+    )
 
     years = sorted(df_.index.year.unique())
     results = []
@@ -180,7 +228,9 @@ def walk_forward_proba(
     pooled_auc = roc_auc_score(pd.concat(oos_y_parts), pd.concat(oos_proba_parts)) if oos_y_parts else np.nan
 
     oos_y = pd.concat(oos_y_parts).sort_index() if oos_y_parts else pd.Series(dtype=int, name="oos_y")
-    oos_proba = pd.concat(oos_proba_parts).sort_index() if oos_proba_parts else pd.Series(dtype=float, name="oos_proba")
+    oos_proba = (
+        pd.concat(oos_proba_parts).sort_index() if oos_proba_parts else pd.Series(dtype=float, name="oos_proba")
+    )
 
     oos_y.name = "oos_y"
     oos_proba.name = "oos_proba"
@@ -232,28 +282,26 @@ def build_overlay_df(
     Builds a single time-indexed df with:
       - ig_oas_bps
       - oos_proba
-      - oos_y
+      - oos_y (optional)
     Used for decision overlays and backtest plumbing.
     """
     base = df.copy()
     base["ig_oas_bps"] = base[oas_col] * 100.0
 
     res = results[(target_col, variant)]
-
     oos_proba = res["oos_proba"]
 
-    # ✅ oos_y is optional (daily run may not include it)
+    # oos_y is optional
     if "oos_y" in res:
         oos_y = res["oos_y"]
     elif target_col in df.columns:
-        # fall back to realized label from df if present
         oos_y = df[target_col]
     else:
         oos_y = pd.Series(index=df.index, dtype=float)
 
     overlay = pd.DataFrame(index=base.index)
     overlay["ig_oas_bps"] = base["ig_oas_bps"]
-    overlay["oos_proba"] = oos_proba.reindex(overlay.index)
-    overlay["oos_y"] = oos_y.reindex(overlay.index)
+    overlay["oos_proba"] = pd.Series(oos_proba).reindex(overlay.index)
+    overlay["oos_y"] = pd.Series(oos_y).reindex(overlay.index)
 
     return overlay.dropna(subset=["oos_proba"])
