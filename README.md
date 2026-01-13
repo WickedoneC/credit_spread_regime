@@ -258,3 +258,35 @@ The daily CSV contains one row per locked target:
 
 We model forward IG spread widening using a walk-forward-by-year logistic regression. Features are strictly lagged (T-1) to avoid leakage. Thresholds are calibrated per calendar year using a Top-N rule to control alert frequency and make signals operationally usable. Daily output is a compact risk table + decision overlay charts to support discretionary portfolio decisions.
 
+
+## Current Market Environment (Context)
+
+**As of the most recent trading date**, the model evaluates U.S. Investment Grade credit risk in the context of both recent spread dynamics and the prevailing rates regime.
+
+Over the **last 21 trading days**, IG option-adjusted spreads (OAS):
+
+- **Current level:** 78 bps  
+- **21-day change:** -4 bps  
+- **Direction:** TIGHTENING
+
+This short-horizon spread movement is provided strictly as **context** for the model’s forward-looking risk signals.
+
+### Relationship to Model Outputs
+
+The daily signals estimate the **probability that IG OAS will widen by at least a specified threshold within the next 21 trading days**, conditional on the current macro–rates and volatility regime:
+
+- **25 bps / 21d (Primary signal)**  
+  Captures elevated risk of a meaningful but non-stress widening episode.
+
+- **50 bps / 21d (Secondary signal)**  
+  Tail-risk indicator designed to flag potential stress or regime-shift scenarios.
+
+Probabilities are converted into alerts using a **top-N-per-year calibration framework**, ensuring that signal frequency remains stable across market cycles and volatility environments.
+
+### Interpretation Notes
+
+- Recent spread tightening or widening does **not** mechanically imply lower or higher forward risk.
+- The model is explicitly designed to identify **risk asymmetries** that may emerge even when recent spread behavior appears benign.
+- Signals should be interpreted as **probabilistic risk indicators**, not point forecasts of spread levels or timing.
+
+---
