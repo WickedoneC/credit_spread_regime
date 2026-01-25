@@ -155,7 +155,7 @@ Below is a snapshot comparing baseline vs regime-conditioned features for select
 
 ### Next steps 
 
-We will focus on **non-linear models** (tree-based/boosting) for the next phase.
+We will focus on **linear models** for the next phase.
 
 1) **Stability plots**
    - Year-by-year AUC (baseline vs regime vs non-linear model)
